@@ -1,141 +1,99 @@
 # Case Study
 
-Yoğun trafik altında çalışan bir e-ticaret senaryosu için sipariş servisi. Sipariş veritabanına kaydedildiğinde kullanıcıya mail gönderilir. Fatura hazırlama işlemi ise kuyruk üzerinden arka planda yapılır ve fatura hazır olunca kullanıcıya fatura maili iletilir.
+An order service for a high-traffic e-commerce scenario. When an order is saved to the database, a confirmation email is sent to the user. Invoice generation runs in the background via a message queue, and once the invoice is ready, an invoice email is sent to the user.
 
-## İçindekiler
-1. [Mimari ve Tasarım Kararları](#1-mimari-ve-tasarım-kararları)
-2. [Teknoloji Seti](#2-teknoloji-seti)
-3. [Kurulum (Adım Adım)](#3-kurulum-adım-adım)
-4. [Çalıştırma ve Test](#4-çalıştırma-ve-test)
-5. [Proje Yapısı](#5-proje-yapısı)
+## Table of Contents
+1. [Architecture and Design Decisions](#1-architecture-and-design-decisions)
+2. [Tech Stack](#2-tech-stack)
+3. [Setup (Step by Step)](#3-setup-step-by-step)
+4. [Running and Testing](#4-running-and-testing)
+5. [Project Structure](#5-project-structure)
 6. [API](#6-api)
-7. [Production İçin Sonraki Adımlar](#7-production-için-sonraki-adımlar)
-8. [İlerleme Durumu / Değişiklik Günlüğü](#8-ilerleme-durumu--değişiklik-günlüğü)
 
 ---
 
-## 1. Mimari ve Tasarım Kararları
+## 1. Architecture and Design Decisions
 
 ```
-                 ┌──────────────────────── tek DB transaction ────────────────────────┐
+                 ┌────────────────────── single DB transaction ───────────────────────┐
 Swagger ──POST──▶│ OrdersController → OrderService → Orders + OrderItems + OutboxMessage │──▶ 202 Accepted
                  └────────────────────────────────────────────────────────────────────┘
-                                                 │ (Outbox delivery servisi)
+                                                 │ (Outbox delivery service)
                                                  ▼
                                     RabbitMQ  exchange: OrderCreated
                                        │                         │
                      queue: order-confirmation-email   queue: invoice
                                        │                         │
-                     OrderConfirmationEmailConsumer   InvoiceConsumer (max 16 paralel)
-                          "Siparişiniz alındı"         fatura hazırla (yavaş) → DB: Invoiced
-                                       │                         │ → "Faturanız hazır"
+                     OrderConfirmationEmailConsumer   InvoiceConsumer (max 16 concurrent)
+                          "Order received"             prepare invoice (slow) → DB: Invoiced
+                                       │                         │ → "Your invoice is ready"
                                        └──────────▶ SMTP (Mailpit) ◀┘
 ```
 
-| Problem | Karar | Neden |
-|---|---|---|
-| Fatura hazırlama uzun sürüyor, 8k TPS var | Fatura işi request'ten ayrıldı, **RabbitMQ** kuyruğunda asenkron işleniyor. API `202 Accepted` döner. | Request thread'leri uzun iş için bloklanmaz; API hızlı kalır, fatura işi ayrı ölçeklenir. |
-| Sipariş DB'ye yazılıp mesaj kaybolabilir (dual-write) | **MassTransit EF Core Transactional Outbox** | Sipariş ve event aynı transaction'da yazılır; RabbitMQ geçici kapalı olsa bile mesaj kaybolmaz. |
-| Yavaş fatura, onay mailini geciktirmemeli | Aynı `OrderCreated` event'i **iki ayrı kuyruğa** gider | Onay maili, fatura kuyruğu birikse de anında gider. |
-| Mesaj tekrar gelebilir (at-least-once) | `InvoiceConsumer` idempotent: `Status == Invoiced` ise atlar | Çift fatura kesilmez. |
-| Geçici SMTP/DB hatası | Retry (1s, 5s, 15s) → sonra `*_error` kuyruğu | Hatalı mesaj kaybolmaz, incelenebilir. |
-| Fatura servisi/DB'nin boğulması | `ConcurrentMessageLimit = 16` | Backpressure: kuyruk birikir ama sistem çökmez. |
-| Fiyat değişirse eski sipariş etkilenmesin | `OrderItem` ürün adı + birim fiyatı **snapshot** olarak saklar | Fatura sipariş anındaki fiyatla kesilir. |
-| GUID PK'lerin index fragmentation'ı | `NewId.NextSequentialGuid()` | SQL Server clustered index'e sıralı insert. |
 
+## 2. Tech Stack
 
-## 2. Teknoloji Seti
-
-| Katman | Teknoloji |
+| Layer | Technology |
 |---|---|
-| Framework | .NET 10 Web API (gereksinim: min .NET 7) |
-| Veritabanı | MS SQL Server 2022 (Docker) |
+| Framework | .NET 10 Web API (requirement: min .NET 7) |
+| Database | MS SQL Server 2022 (Docker) |
 | ORM | Entity Framework Core 10 — **Code First** + Migrations |
-| Mesajlaşma | RabbitMQ + MassTransit 8 (v8 Apache 2.0; v9+ ticari lisanslı) |
-| Mail | MailKit → Mailpit (lokal sahte SMTP sunucusu, web arayüzlü) |
-| Dokümantasyon | Swagger (Swashbuckle) |
+| Messaging | RabbitMQ + MassTransit 8 (v8 is Apache 2.0; v9+ is commercially licensed) |
+| Email | MailKit → Mailpit (local fake SMTP server with a web UI) |
+| Documentation | Swagger (Swashbuckle) |
 
-## 3. Kurulum (Adım Adım)
+## 3. Setup (Step by Step)
 
-### 3.1 Gerekli araçlar
+### 3.1 Prerequisites
 
-| Araç | Kontrol komutu | Kurulum (macOS) |
+| Tool | Check command | Install (macOS) |
 |---|---|---|
-| .NET SDK 8+ (projede 10 kullanıldı) | `dotnet --list-sdks` | `brew install --cask dotnet-sdk` veya https://dotnet.microsoft.com/download |
+| .NET SDK 8+ (project uses 10) | `dotnet --list-sdks` | `brew install --cask dotnet-sdk` or https://dotnet.microsoft.com/download |
 | Docker (Docker Desktop / OrbStack) | `docker info` | `brew install --cask orbstack` |
 
-### 3.2 Altyapıyı ayağa kaldır (SQL Server, RabbitMQ, Mailpit)
+### 3.2 Start the infrastructure (SQL Server, RabbitMQ, Mailpit)
 
 ```bash
 docker compose up -d
-docker ps   # 3 container "Up" olmalı
+docker ps   # 3 containers should be "Up"
 ```
 
-| Servis | Adres | Bilgi |
-|---|---|---|
-| SQL Server | `localhost,1433` | `sa` / `Str0ng!Passw0rd` |
-| RabbitMQ panel | http://localhost:15672 | `guest` / `guest` |
-| Mailpit (gelen mailler) | http://localhost:8025 | — |
+| Service | Address |
+|---|---|
+| SQL Server | `localhost,1433` |
+| RabbitMQ management UI | http://localhost:15672 |
+| Mailpit (received emails) | http://localhost:8025 |
 
-### 3.3 EF Core aracı (sadece migration eklemek için gerekli)
+Credentials are not documented here; they are configured via `docker-compose.yml` and `appsettings.json`.
+
+### 3.3 EF Core tool (only needed to add migrations)
 
 ```bash
-dotnet tool restore   # dotnet-tools.json içindeki dotnet-ef'i kurar
+dotnet tool restore   # installs dotnet-ef from dotnet-tools.json
 ```
 
-Migration'lar `Development` ortamında uygulama açılırken **otomatik** uygulanır. Manuel uygulamak istersen:
+Migrations are applied **automatically** at startup in the `Development` environment. To apply them manually:
 
 ```bash
 dotnet ef database update -p src/ECommerce.Api
 ```
 
-Model değiştiğinde yeni migration:
+To add a new migration after a model change:
 
 ```bash
-dotnet ef migrations add <Isim> -p src/ECommerce.Api -o Data/Migrations
+dotnet ef migrations add <Name> -p src/ECommerce.Api -o Data/Migrations
 ```
 
-## 4. Çalıştırma ve Test
+## 4. Running and Testing
 
 ```bash
 dotnet run --project src/ECommerce.Api
 ```
 
 - Swagger: http://localhost:5160/swagger
-- Gelen mailler: http://localhost:8025
+- Received emails: http://localhost:8025
 
-**Test senaryosu**
-
-1. `GET /api/products` → seed edilmiş ürünleri gör (Laptop, Kulaklık, Mouse).
-2. `POST /api/orders`:
-   ```json
-   {
-     "customerEmail": "test@example.com",
-     "items": [
-       { "productId": 1, "quantity": 1 },
-       { "productId": 2, "quantity": 2 }
-     ]
-   }
-   ```
-   → `202 Accepted`, `status: "Created"`.
-3. Mailpit'te birkaç saniye içinde **"Siparişiniz alındı"** maili:
-   ```
-   Siparişiniz oluşturuldu.
-   Sipariş Detayları;
-
-   • Ürün adı: Laptop
-   • Adet: 1
-   • Birim Fiyat: 35.000,00 TL
-   ...
-   ```
-4. ~10 sn sonra (fatura simülasyonu) **"Faturanız hazır - INV-..."** maili.
-5. `GET /api/orders/{id}` → `status: "Invoiced"`, `invoiceNumber` dolu.
-
-Fatura gecikmesi `appsettings.json > Invoice:SimulatedDelaySeconds` ile ayarlanır (veya `Invoice__SimulatedDelaySeconds=3 dotnet run ...`).
-
-**Hata senaryoları:** geçersiz e-posta / `quantity: 0` / olmayan `productId` → `400 ValidationProblem`.
-
-## 5. Proje Yapısı
+## 5. Project Structure
 
 ```
 ecommerce/
@@ -144,29 +102,29 @@ ecommerce/
 ├── ECommerce.slnx
 └── src/ECommerce.Api/
     ├── Program.cs                # DI, EF Core, MassTransit + Outbox, Swagger
-    ├── appsettings.json          # Connection string, RabbitMQ, SMTP, fatura gecikmesi
+    ├── appsettings.json          # Connection string, RabbitMQ, SMTP, invoice delay
     ├── Controllers/
     │   ├── OrdersController.cs   # POST /api/orders, GET /api/orders/{id}
     │   └── ProductsController.cs # GET /api/products
     ├── Domain/Entities.cs        # Product, Order, OrderItem, OrderStatus
     ├── Data/
-    │   ├── AppDbContext.cs       # Fluent config, seed data, outbox tabloları
-    │   └── Migrations/           # Code First migration'lar
-    ├── Contracts/OrderCreated.cs # Kuyruk mesaj kontratı
+    │   ├── AppDbContext.cs       # Fluent config, seed data, outbox tables
+    │   └── Migrations/           # Code First migrations
+    ├── Contracts/OrderCreated.cs # Queue message contract
     ├── Consumers/
-    │   ├── OrderConfirmationEmailConsumer.cs  # "Siparişiniz alındı" maili
-    │   └── InvoiceConsumer.cs                 # Fatura hazırlama + fatura maili
-    ├── Models/OrderDtos.cs       # Request/response DTO'ları + validation
+    │   ├── OrderConfirmationEmailConsumer.cs  # "Order received" email
+    │   └── InvoiceConsumer.cs                 # Invoice generation + invoice email
+    ├── Models/OrderDtos.cs       # Request/response DTOs + validation
     └── Services/
-        ├── OrderService.cs       # Sipariş oluşturma iş mantığı
-        ├── EmailSender.cs        # MailKit SMTP gönderici
-        └── EmailTemplates.cs     # Mail içerikleri
+        ├── OrderService.cs       # Order creation business logic
+        ├── EmailSender.cs        # MailKit SMTP sender
+        └── EmailTemplates.cs     # Email content
 ```
 
 ## 6. API
 
-| Metot | Endpoint | Açıklama | Yanıt |
+| Method | Endpoint | Description | Response |
 |---|---|---|---|
-| GET | `/api/products` | Ürün listesi | 200 |
-| POST | `/api/orders` | Sipariş oluştur | 202 / 400 |
-| GET | `/api/orders/{id}` | Sipariş durumu (`Created` / `Invoiced`) | 200 / 404 |
+| GET | `/api/products` | List products | 200 |
+| POST | `/api/orders` | Create an order | 202 / 400 |
+| GET | `/api/orders/{id}` | Order status (`Created` / `Invoiced`) | 200 / 404 |
