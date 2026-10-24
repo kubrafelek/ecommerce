@@ -9,6 +9,7 @@ An order service for a high-traffic e-commerce scenario. When an order is saved 
 4. [Running and Testing](#4-running-and-testing)
 5. [Project Structure](#5-project-structure)
 6. [API](#6-api)
+7. [Screenshots](#7-screenshots)
 
 ---
 
@@ -128,3 +129,10 @@ ecommerce/
 | GET | `/api/products` | List products | 200 |
 | POST | `/api/orders` | Create an order | 202 / 400 |
 | GET | `/api/orders/{id}` | Order status (`Created` / `Invoiced`) | 200 / 404 |
+
+## 7. Screenshots
+
+![alt text](<../screenshots/Screenshot 2026-10-24 at 3.25.46 PM.png>)
+![alt text](<../screenshots/Screenshot 2026-10-24 at 3.27.47 PM.png>)
+![alt text](<../screenshots/Screenshot 2026-10-24 at 3.28.42 PM.png>)
+![alt text](<../screenshots/Screenshot 2026-10-24 at 3.28.55 PM.png>)
