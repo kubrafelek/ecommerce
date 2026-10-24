@@ -132,7 +132,7 @@ ecommerce/
 
 ## 7. Screenshots
 
-![alt text](<../screenshots/Screenshot 2026-10-24 at 3.25.46 PM.png>)
-![alt text](<../screenshots/Screenshot 2026-10-24 at 3.27.47 PM.png>)
-![alt text](<../screenshots/Screenshot 2026-10-24 at 3.28.42 PM.png>)
-![alt text](<../screenshots/Screenshot 2026-10-24 at 3.28.55 PM.png>)
+![alt text](<screenshots/Screenshot 2026-10-24 at 3.25.46 PM.png>)
+![alt text](<screenshots/Screenshot 2026-10-24 at 3.27.47 PM.png>)
+![alt text](<screenshots/Screenshot 2026-10-24 at 3.28.42 PM.png>)
+![alt text](<screenshots/Screenshot 2026-10-24 at 3.28.55 PM.png>)
