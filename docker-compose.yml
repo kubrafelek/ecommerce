@@ -1,0 +1,23 @@
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: ecommerce-mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
+    ports:
+      - "1433:1433"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: ecommerce-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Yönetim paneli (guest/guest)
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: ecommerce-mailpit
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web arayüzü (gelen mailler)
